@@ -1,15 +1,44 @@
+//! A library for build scripts to compile go Code.
+//! It's like the `cc` crate for go.
+//!
+//! Add this library as a build-dependency in `Cargo.toml`:
+//!
+//! ```toml
+//! [build-dependencies]
+//! gobuild = "0.1.0-alpha.1"
+//! ```
+//!
+//! # Examples
+//!
+//! Use the `Build` struct to compile `hello.go`:
+//!
+//! ```no_run
+//! fn main() {
+//!     gobuild::Build::new()
+//!         .file("hello.go")
+//!         .compile("foo");
+//! }
+//! ```
+//!
+//! This will generate a `libhello.h` and `libhello.a` in `OUT_DIR`.
+//!
+//! Consider combining this with `bindgen` to generate a Rust wrapper
+//! for the header.
+
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
 use std::thread::{self, JoinHandle};
 use std::{env, fmt};
 
+/// Set the `go build -buildmode`
+///
+/// See `go help buildmode` for more info.
 #[derive(Clone, Debug)]
 pub enum BuildMode {
     // /// Build the listed non-main packages into .a files. Packages named
     // /// main are ignored.
     //Archive,
-
     /// Build the listed main package, plus all packages it imports,
     /// into a C archive file. The only callable symbols will be those
     /// functions exported using a cgo //export comment. Requires
@@ -21,7 +50,6 @@ pub enum BuildMode {
     /// be those functions exported using a cgo //export comment.
     /// Requires exactly one main package to be listed.
     CShared,
-
     // /// Listed main packages are built into executables and listed
     // /// non-main packages are built into .a files (the default
     // ///  behavior)
@@ -190,10 +218,15 @@ impl Build {
         run(&mut command, lib_name)?;
 
         match self.buildmode {
-            BuildMode::CArchive => self.println(&format!("cargo:rustc-link-lib=static={}", lib_name)),
+            BuildMode::CArchive => {
+                self.println(&format!("cargo:rustc-link-lib=static={}", lib_name))
+            }
             BuildMode::CShared => self.println(&format!("cargo:rustc-link-lib=dylib={}", lib_name)),
         }
         self.println(&format!("cargo:rustc-link-search=native={}", dst.display()));
+        for file in &self.files {
+            self.println(&format!("cargo:rerun-if-changed={}", file.display()));
+        }
         Ok(())
     }
 
