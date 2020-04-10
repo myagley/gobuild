@@ -5,10 +5,10 @@ use std::thread::{self, JoinHandle};
 use std::{env, fmt};
 
 #[derive(Clone, Debug)]
-enum BuildMode {
-    /// Build the listed non-main packages into .a files. Packages named
-    /// main are ignored.
-    Archive,
+pub enum BuildMode {
+    // /// Build the listed non-main packages into .a files. Packages named
+    // /// main are ignored.
+    //Archive,
 
     /// Build the listed main package, plus all packages it imports,
     /// into a C archive file. The only callable symbols will be those
@@ -22,44 +22,44 @@ enum BuildMode {
     /// Requires exactly one main package to be listed.
     CShared,
 
-    /// Listed main packages are built into executables and listed
-    /// non-main packages are built into .a files (the default
-    ///  behavior)
-    Default,
+    // /// Listed main packages are built into executables and listed
+    // /// non-main packages are built into .a files (the default
+    // ///  behavior)
+    //Default,
 
-    /// Combine all the listed non-main packages into a single shared
-    /// library that will be used when building with the -linkshared
-    /// option. Packages named main are ignored.
-    Shared,
+    // /// Combine all the listed non-main packages into a single shared
+    // /// library that will be used when building with the -linkshared
+    // /// option. Packages named main are ignored.
+    //Shared,
 
-    /// Build the listed main packages and everything they import into
-    /// executables. Packages not named main are ignored.
-    Exe,
+    // /// Build the listed main packages and everything they import into
+    // /// executables. Packages not named main are ignored.
+    //Exe,
 
-    /// Build the listed main packages and everything they import into
-    /// position independent executables (PIE). Packages not named
-    /// main are ignored.
-    Pie,
+    // /// Build the listed main packages and everything they import into
+    // /// position independent executables (PIE). Packages not named
+    // /// main are ignored.
+    //Pie,
 
-    /// Build the listed main packages, plus all packages that they
-    /// import, into a Go plugin. Packages not named main are ignored.
-    Plugin,
+    // /// Build the listed main packages, plus all packages that they
+    // ///import, into a Go plugin. Packages not named main are ignored.
+    //Plugin,
 
-    Custom(String),
+    //Custom(String),
 }
 
 impl fmt::Display for BuildMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BuildMode::Archive => write!(f, "archive"),
+            // BuildMode::Archive => write!(f, "archive"),
             BuildMode::CArchive => write!(f, "c-archive"),
             BuildMode::CShared => write!(f, "c-shared"),
-            BuildMode::Default => write!(f, "default"),
-            BuildMode::Shared => write!(f, "shared"),
-            BuildMode::Exe => write!(f, "exe"),
-            BuildMode::Pie => write!(f, "pie"),
-            BuildMode::Plugin => write!(f, "plugin"),
-            BuildMode::Custom(ref s) => write!(f, "{}", s),
+            // BuildMode::Default => write!(f, "default"),
+            // BuildMode::Shared => write!(f, "shared"),
+            // BuildMode::Exe => write!(f, "exe"),
+            // BuildMode::Pie => write!(f, "pie"),
+            // BuildMode::Plugin => write!(f, "plugin"),
+            // BuildMode::Custom(ref s) => write!(f, "{}", s),
         }
     }
 }
@@ -152,6 +152,14 @@ impl Build {
         self
     }
 
+    /// Configures the build mode. See `go help buildmode for more details.
+    ///
+    /// Build mode `c-archive` is used by default.
+    pub fn buildmode(&mut self, buildmode: BuildMode) -> &mut Build {
+        self.buildmode = buildmode;
+        self
+    }
+
     /// Define whether metadata should be emitted for cargo allowing it to
     /// automatically link the binary. Defaults to `true`.
     ///
@@ -168,16 +176,8 @@ impl Build {
     /// Run the compiler, generating the file `output`
     ///
     /// This will return a result instead of panicing; see compile() for the complete description.
-    pub fn try_compile(&self, output: &str) -> Result<(), Error> {
-        let (lib_name, gnu_lib_name) = if output.starts_with("lib") && output.ends_with(".a") {
-            (&output[3..output.len() - 2], output.to_owned())
-        } else {
-            let mut gnu = String::with_capacity(5 + output.len());
-            gnu.push_str("lib");
-            gnu.push_str(&output);
-            gnu.push_str(".a");
-            (output, gnu)
-        };
+    pub fn try_compile(&self, lib_name: &str) -> Result<(), Error> {
+        let gnu_lib_name = self.get_gnu_lib_name(lib_name);
         let dst = self.get_out_dir()?;
         let out = dst.join(&gnu_lib_name);
 
@@ -187,9 +187,12 @@ impl Build {
         command.args(&["-o", &out.display().to_string()]);
         command.args(self.files.iter());
 
-        run(&mut command, output)?;
+        run(&mut command, lib_name)?;
 
-        self.println(&format!("cargo:rustc-link-lib=static={}", lib_name));
+        match self.buildmode {
+            BuildMode::CArchive => self.println(&format!("cargo:rustc-link-lib=static={}", lib_name)),
+            BuildMode::CShared => self.println(&format!("cargo:rustc-link-lib=dylib={}", lib_name)),
+        }
         self.println(&format!("cargo:rustc-link-search=native={}", dst.display()));
         Ok(())
     }
@@ -221,6 +224,24 @@ impl Build {
             })?,
         };
         Ok(path)
+    }
+
+    fn get_gnu_lib_name(&self, lib_name: &str) -> String {
+        let mut gnu_lib_name = String::with_capacity(5 + lib_name.len());
+        gnu_lib_name.push_str("lib");
+        gnu_lib_name.push_str(&lib_name);
+
+        match self.buildmode {
+            BuildMode::CArchive => gnu_lib_name.push_str(".a"),
+            BuildMode::CShared => {
+                if cfg!(windows) {
+                    gnu_lib_name.push_str(".dll")
+                } else {
+                    gnu_lib_name.push_str(".so")
+                }
+            }
+        }
+        gnu_lib_name
     }
 
     fn println(&self, s: &str) {
