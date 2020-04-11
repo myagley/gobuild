@@ -15,3 +15,6 @@ keywords = ["build-dependencies"]
 readme = "README.md"
 categories = ["development-tools::build-utils"]
 edition = "2018"
+
+[dependencies]
+cc = "1.0"

@@ -41,7 +41,6 @@ pub enum BuildMode {
     // /// Build the listed non-main packages into .a files. Packages named
     // /// main are ignored.
     //Archive,
-
     /// Build the listed main package, plus all packages it imports,
     /// into a C archive file. The only callable symbols will be those
     /// functions exported using a cgo //export comment. Requires
@@ -53,7 +52,6 @@ pub enum BuildMode {
     /// be those functions exported using a cgo //export comment.
     /// Requires exactly one main package to be listed.
     CShared,
-
     // /// Listed main packages are built into executables and listed
     // /// non-main packages are built into .a files (the default
     // ///  behavior)
@@ -120,6 +118,7 @@ pub struct Build {
 #[derive(Clone, Debug)]
 enum ErrorKind {
     EnvVarNotFound,
+    EnvVarValueUnknown,
     ToolNotFound,
     ToolExecError,
 }
@@ -139,6 +138,18 @@ impl Error {
             kind,
             message: message.to_owned(),
         }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
     }
 }
 
@@ -182,7 +193,8 @@ impl Build {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        self.env.insert(key.as_ref().to_owned(), val.as_ref().to_owned());
+        self.env
+            .insert(key.as_ref().to_owned(), val.as_ref().to_owned());
         self
     }
 
@@ -229,17 +241,30 @@ impl Build {
             self.println(&format!("cargo:rerun-if-changed={}", file.display()));
         }
 
+        let ccompiler = cc::Build::new().try_get_compiler().map_err(|e| {
+            Error::new(
+                ErrorKind::ToolNotFound,
+                &format!("could not find c compiler: {}", e),
+            )
+        })?;
+
         let mut command = process::Command::new("go");
         command.arg("build");
         command.args(&["-buildmode", &self.buildmode.to_string()]);
         command.args(&["-o", &out.display().to_string()]);
         command.args(self.files.iter());
+        command.env("CC", ccompiler.cc_env());
+        command.env("GOARCH", self.get_goarch()?);
+        command.env("GOOS", self.get_goos()?);
+
         command.envs(&self.env);
 
         run(&mut command, lib_name)?;
 
         match self.buildmode {
-            BuildMode::CArchive => self.println(&format!("cargo:rustc-link-lib=static={}", lib_name)),
+            BuildMode::CArchive => {
+                self.println(&format!("cargo:rustc-link-lib=static={}", lib_name))
+            }
             BuildMode::CShared => self.println(&format!("cargo:rustc-link-lib=dylib={}", lib_name)),
         }
         self.println(&format!("cargo:rustc-link-search=native={}", dst.display()));
@@ -291,6 +316,59 @@ impl Build {
             }
         }
         gnu_lib_name
+    }
+
+    fn get_goarch(&self) -> Result<&'static str, Error> {
+        let arch = env::var("CARGO_CFG_TARGET_ARCH").map_err(|_| {
+            Error::new(
+                ErrorKind::EnvVarNotFound,
+                "Cannot find CARGO_CFG_TARGET_ARCH env var",
+            )
+        })?;
+        // let endian = env::var("CARGO_CFG_TARGET_ENDIAN").map_err(|_| Error::new(ErrorKind::EnvVarNotFound, "Cannot find CARGO_CFG_TARGET_ENDIAN env var"))?;
+        let goarch = match arch.as_str() {
+            "x86" => "386",
+            "x86_64" => "amd64",
+            "mips" => "mips",
+            "powerpc" => "ppc",
+            "powerpc64" => "ppc64",
+            "arm" => "arm",
+            "aarch64" => "arm64",
+            a => {
+                return Err(Error::new(
+                    ErrorKind::EnvVarValueUnknown,
+                    &format!("Unknown arch {}", a),
+                ))
+            }
+        };
+        Ok(goarch)
+    }
+
+    fn get_goos(&self) -> Result<&'static str, Error> {
+        let arch = env::var("CARGO_CFG_TARGET_OS").map_err(|_| {
+            Error::new(
+                ErrorKind::EnvVarNotFound,
+                "Cannot find CARGO_CFG_TARGET_OS env var",
+            )
+        })?;
+        let goos = match arch.as_str() {
+            "windows" => "windows",
+            "macos" => "darwin",
+            "ios" => "darwin",
+            "linux" => "linux",
+            "android" => "android",
+            "freebsd" => "freebsd",
+            "dragonfly" => "dragonfly",
+            "openbsd" => "openbsd",
+            "netbsd" => "netbsd",
+            o => {
+                return Err(Error::new(
+                    ErrorKind::EnvVarValueUnknown,
+                    &format!("Unknown os {}", o),
+                ))
+            }
+        };
+        Ok(goos)
     }
 
     fn println(&self, s: &str) {
