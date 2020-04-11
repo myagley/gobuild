@@ -25,6 +25,8 @@
 //! Consider combining this with `bindgen` to generate a Rust wrapper
 //! for the header.
 
+use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
@@ -39,6 +41,7 @@ pub enum BuildMode {
     // /// Build the listed non-main packages into .a files. Packages named
     // /// main are ignored.
     //Archive,
+
     /// Build the listed main package, plus all packages it imports,
     /// into a C archive file. The only callable symbols will be those
     /// functions exported using a cgo //export comment. Requires
@@ -50,6 +53,7 @@ pub enum BuildMode {
     /// be those functions exported using a cgo //export comment.
     /// Requires exactly one main package to be listed.
     CShared,
+
     // /// Listed main packages are built into executables and listed
     // /// non-main packages are built into .a files (the default
     // ///  behavior)
@@ -106,6 +110,7 @@ impl Default for BuildMode {
 #[derive(Clone, Debug, Default)]
 pub struct Build {
     files: Vec<PathBuf>,
+    env: HashMap<OsString, OsString>,
     out_dir: Option<PathBuf>,
     buildmode: BuildMode,
     cargo_metadata: bool,
@@ -146,6 +151,7 @@ impl Build {
     pub fn new() -> Self {
         Self {
             files: Vec::new(),
+            env: HashMap::new(),
             out_dir: None,
             buildmode: BuildMode::CArchive,
             cargo_metadata: true,
@@ -167,6 +173,16 @@ impl Build {
         for file in p.into_iter() {
             self.file(file);
         }
+        self
+    }
+
+    /// Inserts or updates an environment variable mapping.
+    pub fn env<K, V>(&mut self, key: K, val: V) -> &mut Build
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        self.env.insert(key.as_ref().to_owned(), val.as_ref().to_owned());
         self
     }
 
@@ -209,24 +225,24 @@ impl Build {
         let dst = self.get_out_dir()?;
         let out = dst.join(&gnu_lib_name);
 
+        for file in &self.files {
+            self.println(&format!("cargo:rerun-if-changed={}", file.display()));
+        }
+
         let mut command = process::Command::new("go");
         command.arg("build");
         command.args(&["-buildmode", &self.buildmode.to_string()]);
         command.args(&["-o", &out.display().to_string()]);
         command.args(self.files.iter());
+        command.envs(&self.env);
 
         run(&mut command, lib_name)?;
 
         match self.buildmode {
-            BuildMode::CArchive => {
-                self.println(&format!("cargo:rustc-link-lib=static={}", lib_name))
-            }
+            BuildMode::CArchive => self.println(&format!("cargo:rustc-link-lib=static={}", lib_name)),
             BuildMode::CShared => self.println(&format!("cargo:rustc-link-lib=dylib={}", lib_name)),
         }
         self.println(&format!("cargo:rustc-link-search=native={}", dst.display()));
-        for file in &self.files {
-            self.println(&format!("cargo:rerun-if-changed={}", file.display()));
-        }
         Ok(())
     }
 
