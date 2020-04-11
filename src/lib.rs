@@ -253,6 +253,7 @@ impl Build {
         command.args(&["-buildmode", &self.buildmode.to_string()]);
         command.args(&["-o", &out.display().to_string()]);
         command.args(self.files.iter());
+        command.env("CGO_ENABLED", "1");
         command.env("CC", ccompiler.cc_env());
         command.env("GOARCH", self.get_goarch()?);
         command.env("GOOS", self.get_goos()?);
