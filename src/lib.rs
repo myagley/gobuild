@@ -111,6 +111,9 @@ pub struct Build {
     env: HashMap<OsString, OsString>,
     out_dir: Option<PathBuf>,
     buildmode: BuildMode,
+    compiler: PathBuf,
+    goarch: Option<OsString>,
+    goos: Option<OsString>,
     cargo_metadata: bool,
 }
 
@@ -165,6 +168,9 @@ impl Build {
             env: HashMap::new(),
             out_dir: None,
             buildmode: BuildMode::CArchive,
+            compiler: PathBuf::from("go"),
+            goarch: None,
+            goos: None,
             cargo_metadata: true,
         }
     }
@@ -216,6 +222,35 @@ impl Build {
         self
     }
 
+    /// Configures the compiler to be used to produce output.
+    ///
+    /// This option is automatically determined from the target platform or a number
+    /// of environment variables, so it's not required to call this function.
+    ///
+    /// Default: `go`
+    pub fn compiler<P: AsRef<Path>>(&mut self, compiler: P) -> &mut Build {
+        self.compiler = compiler.as_ref().to_owned();
+        self
+    }
+
+    /// Sets the `GOARCH`.
+    ///
+    /// This option is automatically scraped from the `CARGO_CFG_*` environment
+    /// variables by build scripts, so it's not required to call this function.
+    pub fn goarch<T: AsRef<OsStr>>(&mut self, arch: T) -> &mut Build {
+        self.goarch = Some(arch.as_ref().to_owned());
+        self
+    }
+
+    /// Sets the `GOOS`.
+    ///
+    /// This option is automatically scraped from the `CARGO_CFG_*` environment
+    /// variables by build scripts, so it's not required to call this function.
+    pub fn goos<T: AsRef<OsStr>>(&mut self, os: T) -> &mut Build {
+        self.goos = Some(os.as_ref().to_owned());
+        self
+    }
+
     /// Define whether metadata should be emitted for cargo allowing it to
     /// automatically link the binary. Defaults to `true`.
     ///
@@ -248,15 +283,27 @@ impl Build {
             )
         })?;
 
-        let mut command = process::Command::new("go");
+        let mut command = process::Command::new(&self.compiler);
         command.arg("build");
         command.args(&["-buildmode", &self.buildmode.to_string()]);
         command.args(&["-o", &out.display().to_string()]);
         command.args(self.files.iter());
         command.env("CGO_ENABLED", "1");
         command.env("CC", ccompiler.path());
-        command.env("GOARCH", self.get_goarch()?);
-        command.env("GOOS", self.get_goos()?);
+
+        let goarch = self
+            .goarch
+            .as_ref()
+            .map(|g| Ok(g.to_owned()))
+            .unwrap_or_else(|| self.get_goarch())?;
+        command.env("GOARCH", goarch);
+
+        let goos = self
+            .goarch
+            .as_ref()
+            .map(|g| Ok(g.to_owned()))
+            .unwrap_or_else(|| self.get_goos())?;
+        command.env("GOOS", goos);
 
         command.envs(&self.env);
 
@@ -319,7 +366,7 @@ impl Build {
         gnu_lib_name
     }
 
-    fn get_goarch(&self) -> Result<&'static str, Error> {
+    fn get_goarch(&self) -> Result<OsString, Error> {
         let arch = env::var("CARGO_CFG_TARGET_ARCH").map_err(|_| {
             Error::new(
                 ErrorKind::EnvVarNotFound,
@@ -342,10 +389,10 @@ impl Build {
                 ))
             }
         };
-        Ok(goarch)
+        Ok(goarch.into())
     }
 
-    fn get_goos(&self) -> Result<&'static str, Error> {
+    fn get_goos(&self) -> Result<OsString, Error> {
         let arch = env::var("CARGO_CFG_TARGET_OS").map_err(|_| {
             Error::new(
                 ErrorKind::EnvVarNotFound,
@@ -369,7 +416,7 @@ impl Build {
                 ))
             }
         };
-        Ok(goos)
+        Ok(goos.into())
     }
 
     fn println(&self, s: &str) {
@@ -414,7 +461,7 @@ fn spawn(cmd: &mut Command, program: &str) -> Result<(Child, JoinHandle<()>), Er
                 for line in stderr.split(b'\n').filter_map(|l| l.ok()) {
                     print!("cargo:warning=");
                     io::stdout().write_all(&line).unwrap();
-                    println!("");
+                    println!();
                 }
             });
             Ok((child, print))
