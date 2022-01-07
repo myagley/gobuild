@@ -115,6 +115,8 @@ pub struct Build {
     goarch: Option<OsString>,
     goos: Option<OsString>,
     cargo_metadata: bool,
+    ldflags: Option<OsString>,
+    trim_paths: bool,
 }
 
 /// Represents the types of errors that may occur.
@@ -172,6 +174,8 @@ impl Build {
             goarch: None,
             goos: None,
             cargo_metadata: true,
+            ldflags: None,
+            trim_paths: false,
         }
     }
 
@@ -264,6 +268,20 @@ impl Build {
         self
     }
 
+    /// Set the linker flags to pass to the go build.
+    pub fn ldflags<T: AsRef<OsStr>>(&mut self, ldflags: T) -> &mut Build {
+        self.ldflags = Some(ldflags.as_ref().to_owned());
+        self
+    }
+
+    /// Remove all file system paths from the resulting executable.
+    ///
+    /// See the `-trimpath` flag in `go help build` for more details.
+    pub fn trim_paths(&mut self, trim_paths: bool) -> &mut Build {
+        self.trim_paths = trim_paths;
+        self
+    }
+
     /// Run the compiler, generating the file `output`
     ///
     /// This will return a result instead of panicing; see compile() for the complete description.
@@ -287,6 +305,13 @@ impl Build {
         command.arg("build");
         command.args(&["-buildmode", &self.buildmode.to_string()]);
         command.args(&["-o", &out.display().to_string()]);
+        if let Some(ldflags) = &self.ldflags {
+            command.arg("-ldflags");
+            command.arg(ldflags);
+        }
+        if self.trim_paths {
+            command.arg("-trimpath");
+        }
         command.args(self.files.iter());
         command.env("CGO_ENABLED", "1");
         command.env("CC", ccompiler.path());
