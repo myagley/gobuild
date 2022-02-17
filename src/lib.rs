@@ -109,6 +109,7 @@ impl Default for BuildMode {
 pub struct Build {
     files: Vec<PathBuf>,
     env: HashMap<OsString, OsString>,
+    work_dir: Option<PathBuf>,
     out_dir: Option<PathBuf>,
     buildmode: BuildMode,
     compiler: PathBuf,
@@ -166,6 +167,7 @@ impl Build {
         Self {
             files: Vec::new(),
             env: HashMap::new(),
+            work_dir: None,
             out_dir: None,
             buildmode: BuildMode::CArchive,
             compiler: PathBuf::from("go"),
@@ -213,6 +215,16 @@ impl Build {
         self.out_dir = Some(out_dir.as_ref().to_owned());
         self
     }
+
+	/// Configures the working directory where the `go build` command is going
+	/// to run
+	pub fn work_dir<P: AsRef<Path>>(
+		&mut self,
+		work_dir: P,
+	) -> &mut Build {
+		self.work_dir = Some(work_dir.as_ref().to_owned());
+		self
+	}
 
     /// Configures the build mode. See `go help buildmode for more details.
     ///
@@ -284,10 +296,14 @@ impl Build {
         })?;
 
         let mut command = process::Command::new(&self.compiler);
+        if let Some(work_dir) = self.work_dir.as_ref() {
+            let full_work_dir = env::current_dir().unwrap().join(work_dir);
+            command.current_dir(full_work_dir);
+        }
         command.arg("build");
         command.args(&["-buildmode", &self.buildmode.to_string()]);
         command.args(&["-o", &out.display().to_string()]);
-        command.args(self.files.iter());
+		command.args(self.files.iter().map(|p|  env::current_dir().unwrap().join(p)));
         command.env("CGO_ENABLED", "1");
         command.env("CC", ccompiler.path());
 
